@@ -1,19 +1,159 @@
-{
-  "name": "portfolio-tracker",
-  "private": true,
-  "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-react": "^4.0.0",
-    "vite": "^5.0.0"
+import { useState, useEffect, useCallback } from "react";
+
+const initialHoldings = [
+  { id: 1, symbol: "RELIANCE", name: "Reliance Industries", qty: 10, avgBuy: 2450 },
+  { id: 2, symbol: "TCS", name: "Tata Consultancy Services", qty: 5, avgBuy: 3200 },
+  { id: 3, symbol: "INFY", name: "Infosys Ltd", qty: 20, avgBuy: 1450 },
+];
+
+function fmt(n) {
+  return new Intl.NumberFormat("en-IN", {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  }).format(n);
+}
+
+// ✅ Live price fetch (Yahoo Finance)
+async function fetchNSEPrice(symbol) {
+  try {
+    const res = await fetch(
+      `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbol}.NS`
+    );
+    const data = await res.json();
+    const q = data.quoteResponse.result[0];
+
+    if (!q) throw new Error("No data");
+
+    return {
+      symbol,
+      price: q.regularMarketPrice,
+      change: q.regularMarketChange,
+      changePct: q.regularMarketChangePercent,
+    };
+  } catch (e) {
+    return { symbol, price: null, error: e.message };
   }
+}
+
+export default function App() {
+  const [holdings, setHoldings] = useState(() => {
+    const saved = localStorage.getItem("holdings");
+    return saved ? JSON.parse(saved) : initialHoldings;
+  });
+
+  const [prices, setPrices] = useState({});
+  const [newStock, setNewStock] = useState({
+    symbol: "",
+    name: "",
+    qty: "",
+    avgBuy: "",
+  });
+
+  // Save to localStorage
+  useEffect(() => {
+    localStorage.setItem("holdings", JSON.stringify(holdings));
+  }, [holdings]);
+
+  const fetchPrices = useCallback(async () => {
+    const results = await Promise.all(
+      holdings.map((h) => fetchNSEPrice(h.symbol))
+    );
+
+    const map = {};
+    results.forEach((r) => {
+      if (r.price !== null) map[r.symbol] = r;
+    });
+
+    setPrices(map);
+  }, [holdings]);
+
+  useEffect(() => {
+    fetchPrices();
+    const interval = setInterval(fetchPrices, 300000);
+    return () => clearInterval(interval);
+  }, [fetchPrices]);
+
+  function addStock() {
+    if (!newStock.symbol || !newStock.qty || !newStock.avgBuy) return;
+
+    setHoldings((prev) => [
+      ...prev,
+      {
+        id: Date.now(),
+        symbol: newStock.symbol.toUpperCase(),
+        name: newStock.name,
+        qty: Number(newStock.qty),
+        avgBuy: Number(newStock.avgBuy),
+      },
+    ]);
+
+    setNewStock({ symbol: "", name: "", qty: "", avgBuy: "" });
+  }
+
+  function deleteStock(id) {
+    setHoldings((prev) => prev.filter((h) => h.id !== id));
+  }
+
+  const totalInvested = holdings.reduce(
+    (sum, h) => sum + h.qty * h.avgBuy,
+    0
+  );
+
+  const totalCurrent = holdings.reduce((sum, h) => {
+    const p = prices[h.symbol];
+    return p?.price ? sum + p.price * h.qty : sum;
+  }, 0);
+
+  const totalGain = totalCurrent - totalInvested;
+
+  return (
+    <div style={{ padding: 30 }}>
+      <h2>📊 Portfolio Tracker</h2>
+
+      <div style={{ marginBottom: 20 }}>
+        <input placeholder="Symbol" value={newStock.symbol}
+          onChange={(e) => setNewStock({ ...newStock, symbol: e.target.value })} />
+        <input placeholder="Name" value={newStock.name}
+          onChange={(e) => setNewStock({ ...newStock, name: e.target.value })} />
+        <input placeholder="Qty" type="number" value={newStock.qty}
+          onChange={(e) => setNewStock({ ...newStock, qty: e.target.value })} />
+        <input placeholder="Avg Buy" type="number" value={newStock.avgBuy}
+          onChange={(e) => setNewStock({ ...newStock, avgBuy: e.target.value })} />
+        <button onClick={addStock}>Add</button>
+      </div>
+
+      {holdings.map((h) => {
+        const p = prices[h.symbol];
+        const current = p?.price ? p.price * h.qty : null;
+        const invested = h.qty * h.avgBuy;
+        const gain = current !== null ? current - invested : null;
+
+        return (
+          <div key={h.id} style={{ marginBottom: 15 }}>
+            <strong>{h.symbol}</strong> — {h.name}
+            <button onClick={() => deleteStock(h.id)} style={{ marginLeft: 10 }}>❌</button>
+            <br />
+            Qty: {h.qty} | Avg: ₹{fmt(h.avgBuy)} <br />
+            Price: {p ? `₹${fmt(p.price)}` : "Loading..."} <br />
+            Value: {current ? `₹${fmt(current)}` : "-"} <br />
+            P&L:{" "}
+            {gain !== null ? (
+              <span style={{ color: gain >= 0 ? "lime" : "red" }}>
+                ₹{fmt(gain)}
+              </span>
+            ) : "-"}
+          </div>
+        );
+      })}
+
+      <hr />
+
+      <h3>Summary</h3>
+      <p>Invested: ₹{fmt(totalInvested)}</p>
+      <p>Current: ₹{fmt(totalCurrent)}</p>
+      <p style={{ color: totalGain >= 0 ? "lime" : "red" }}>
+        P&L: ₹{fmt(totalGain)}
+      </p>
+    </div>
+  );
 }
